@@ -4,68 +4,65 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - "v*"
+      - 'v*'
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
+            platform: Linux x86-64
             artifact: SoundPackMaker-linux-x86_64
-            file: SoundPackMaker
+            executable: SoundPackMaker
           - os: windows-latest
+            platform: Windows x86-64
             artifact: SoundPackMaker-windows-x86_64
-            file: SoundPackMaker.exe
-    runs-on: ${{ matrix.os }}
+            executable: SoundPackMaker.exe
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      # Supports both layouts:
-      # 1. Project files directly in the repository root (recommended).
-      # 2. The ZIP's enclosing soundpack-maker/ directory committed as a subfolder.
-      - name: Locate Sound Pack Maker project
+      - name: Find project directory
         id: project
         shell: bash
         run: |
           set -euo pipefail
-          project_dir=""
+          project_dir=''
 
-          if [[ -f "build.py" && -f "requirements-build.txt" && -f "src/soundpack_maker.py" ]]; then
-            project_dir="."
+          if [[ -f build.py && -f requirements-build.txt && -f src/soundpack_maker.py ]]; then
+            project_dir='.'
           else
             while IFS= read -r candidate; do
-              candidate_dir="$(dirname "$candidate")"
+              candidate_dir="${candidate%/build.py}"
               if [[ -f "$candidate_dir/requirements-build.txt" && -f "$candidate_dir/src/soundpack_maker.py" ]]; then
                 project_dir="$candidate_dir"
                 break
               fi
-            done < <(find . -mindepth 2 -maxdepth 5 -type f -name build.py \
-              -not -path '*/.git/*' -not -path '*/.venv/*' -print)
+            done < <(find . -mindepth 2 -maxdepth 5 -type f -name build.py -not -path '*/.git/*' -not -path '*/.venv/*' -print)
           fi
 
           if [[ -z "$project_dir" ]]; then
-            echo "Could not locate build.py, requirements-build.txt and src/soundpack_maker.py." >&2
-            echo "Put the project files in the repository root, or keep them together in a subfolder." >&2
-            echo "Repository files:" >&2
-            find . -maxdepth 4 -type f -print | sort >&2
+            echo 'Could not find build.py, requirements-build.txt and src/soundpack_maker.py together.' >&2
+            find . -maxdepth 5 -type f -print | sort >&2
             exit 1
           fi
 
           echo "dir=$project_dir" >> "$GITHUB_OUTPUT"
           echo "requirements=$project_dir/requirements-build.txt" >> "$GITHUB_OUTPUT"
-          echo "Building from: $project_dir"
+          echo "Building project in: $project_dir"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
           cache: pip
           cache-dependency-path: ${{ steps.project.outputs.requirements }}
 
@@ -74,44 +71,49 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Install Linux GUI build dependencies
+      - name: Install Linux Tk dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-tk tk-dev
+          sudo apt-get install -y python3-tk tk-dev tcl-dev
 
-      - name: Install Python dependencies
+      - name: Install build requirements
         working-directory: ${{ steps.project.outputs.dir }}
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements-build.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
 
       - name: Build executable
         working-directory: ${{ steps.project.outputs.dir }}
         run: python build.py
 
-      - name: Upload executable
+      - name: Upload executable artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ steps.project.outputs.dir }}/dist/${{ matrix.file }}
+          path: ${{ steps.project.outputs.dir }}/dist/${{ matrix.executable }}
           if-no-files-found: error
           compression-level: 0
 
   release:
+    name: Publish tagged release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets
-          merge-multiple: false
 
-      - name: Publish GitHub release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          files: release-assets/**
+
           files: release-assets/**
         uses: softprops/action-gh-release@v2
         with:
